@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Reimbursement Report</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f5f3ef;
+    --surface: #ffffff;
+    --surface-alt: #faf9f7;
+    --border: #e2ddd5;
+    --border-strong: #c9c2b8;
+    --text-primary: #1a1714;
+    --text-secondary: #6b6158;
+    --text-tertiary: #9a9088;
+    --accent: #c67a2e;
+    --accent-soft: #f5e6d3;
+    --accent-hover: #b06a22;
+    --danger: #c0392b;
+    --success: #27ae60;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'DM Sans', system-ui, sans-serif;
+    --radius: 8px;
+    --shadow-sm: 0 1px 3px rgba(26,23,20,0.06);
+    --shadow-md: 0 4px 16px rgba(26,23,20,0.08);
+    --shadow-lg: 0 8px 32px rgba(26,23,20,0.12);
+  }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text-primary);
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  #root { min-height: 100vh; }
+
+  /* Animations */
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+
+  .fade-in { animation: fadeIn 0.4s ease-out both; }
+  .slide-up { animation: slideUp 0.5s ease-out both; }
+  .pulse { animation: pulse 1.5s ease-in-out infinite; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useRef, useCallback, useEffect, useMemo } = React;
+
+/* ───── Icon components ───── */
+const Icons = {
+  Upload: () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+    </svg>
+  ),
+  FileText: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>
+    </svg>
+  ),
+  Download: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+  ),
+  Trash: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+    </svg>
+  ),
+  Check: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12"/>
+    </svg>
+  ),
+  Image: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+    </svg>
+  ),
+  Loader: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{animation:'spin 1s linear infinite'}}>
+      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+    </svg>
+  ),
+  Receipt: () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 3 2V2l-3 2-3-2-3 2-3-2-3 2-3-2z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="12" y2="16"/>
+    </svg>
+  ),
+  Edit: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+    </svg>
+  ),
+  Plus: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>
+  ),
+};
+
+/* ───── Utility functions ───── */
+function genId() { return Math.random().toString(36).slice(2, 10); }
+
+function formatCurrency(val) {
+  const num = parseFloat(val);
+  if (isNaN(num)) return '';
+  return num.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+}
+
+function parseCurrency(str) {
+  if (!str) return 0;
+  const cleaned = String(str).replace(/[^0-9.\-]/g, '');
+  return parseFloat(cleaned) || 0;
+}
+
+function extractAmountFromText(text) {
+  // Match dollar amounts: $1,234.56 or 1,234.56 or 1234.56
+  const patterns = [
+    /\$\s?([\d,]+\.?\d{0,2})/g,
+    /(?:total|amount|due|subtotal|balance|grand\s*total)[:\s]*\$?\s?([\d,]+\.?\d{0,2})/gi,
+    /([\d,]+\.\d{2})/g,
+  ];
+  
+  let amounts = [];
+  for (const pattern of patterns) {
+    let m;
+    while ((m = pattern.exec(text)) !== null) {
+      const val = parseFloat(m[1].replace(/,/g, ''));
+      if (val > 0 && val < 1000000) amounts.push(val);
+    }
+  }
+  // Return the largest amount found (usually the total)
+  if (amounts.length === 0) return '';
+  amounts.sort((a, b) => b - a);
+  return amounts[0].toFixed(2);
+}
+
+function extractDateFromText(text) {
+  const patterns = [
+    /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/g,
+    /(\w+)\s+(\d{1,2}),?\s+(\d{4})/g,
+    /(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/g,
+  ];
+  
+  // MM/DD/YYYY or MM-DD-YYYY
+  let m = patterns[0].exec(text);
+  if (m) {
+    let [, a, b, c] = m;
+    if (c.length === 2) c = '20' + c;
+    const month = a.padStart(2, '0');
+    const day = b.padStart(2, '0');
+    return `${month}/${day}/${c}`;
+  }
+  
+  // Month DD, YYYY
+  const months = { jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12' };
+  m = patterns[1].exec(text);
+  if (m) {
+    const mon = months[m[1].toLowerCase().slice(0,3)];
+    if (mon) return `${mon}/${m[2].padStart(2,'0')}/${m[3]}`;
+  }
+  
+  // YYYY-MM-DD
+  m = patterns[2].exec(text);
+  if (m) return `${m[2].padStart(2,'0')}/${m[3].padStart(2,'0')}/${m[1]}`;
+  
+  return '';
+}
+
+async function fileToImageUrl(file) {
+  if (file.type === 'application/pdf') {
+    // For PDFs, we'll use a canvas placeholder approach
+    return URL.createObjectURL(file);
+  }
+  return URL.createObjectURL(file);
+}
+
+async function fileToImageData(file) {
+  return new Promise((resolve) => {
+    if (file.type === 'application/pdf') {
+      // For PDF files, create a readable placeholder
+      resolve(null);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ───── Editable Title ───── */
+function EditableTitle({ value, onChange }) {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={() => setEditing(false)}
+        onKeyDown={(e) => e.key === 'Enter' && setEditing(false)}
+        style={{
+          fontFamily: 'var(--sans)',
+          fontSize: '22px',
+          fontWeight: 600,
+          color: 'var(--text-primary)',
+          background: 'var(--surface)',
+          border: '2px solid var(--accent)',
+          borderRadius: 'var(--radius)',
+          padding: '6px 12px',
+          width: '100%',
+          maxWidth: '500px',
+          outline: 'none',
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      onClick={() => setEditing(true)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+        padding: '6px 12px', borderRadius: 'var(--radius)',
+        transition: 'background 0.2s',
+      }}
+      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.03)'}
+      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+    >
+      <h1 style={{ fontSize: '22px', fontWeight: 600, letterSpacing: '-0.01em' }}>{value}</h1>
+      <span style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}><Icons.Edit /></span>
+    </div>
+  );
+}
+
+function EditableField({ label, value, onChange, fontSize = '13px', fontWeight = 400, placeholder = '' }) {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  if (editing) {
+    return (
+      <div style={{ flex: 1, minWidth: '120px' }}>
+        {label && <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>{label}</div>}
+        <input
+          ref={inputRef}
+          type="text"
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={() => setEditing(false)}
+          onKeyDown={(e) => e.key === 'Enter' && setEditing(false)}
+          style={{
+            fontFamily: 'var(--sans)', fontSize, fontWeight,
+            color: 'var(--text-primary)', background: 'var(--surface)',
+            border: '2px solid var(--accent)', borderRadius: 'var(--radius)',
+            padding: '4px 8px', width: '100%', outline: 'none',
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      onClick={() => setEditing(true)}
+      style={{ flex: 1, minWidth: '120px', cursor: 'pointer', padding: '4px 8px', borderRadius: 'var(--radius)', transition: 'background 0.2s' }}
+      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.03)'}
+      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+    >
+      {label && <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>{label}</div>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize, fontWeight, color: value ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
+        {value || placeholder}
+        <span style={{ color: 'var(--text-tertiary)', opacity: 0.4, flexShrink: 0 }}><Icons.Edit /></span>
+      </div>
+    </div>
+  );
+}
+
+/* ───── Upload Zone ───── */
+function UploadZone({ onFiles, processing, fileCount }) {
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef(null);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files).filter(f =>
+      f.type.startsWith('image/') || f.type === 'application/pdf'
+    );
+    if (files.length) onFiles(files);
+  }, [onFiles]);
+
+  const handleChange = (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length) onFiles(files);
+    e.target.value = '';
+  };
+
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+      onClick={() => !processing && inputRef.current.click()}
+      className="fade-in"
+      style={{
+        border: `2px dashed ${dragOver ? 'var(--accent)' : 'var(--border-strong)'}`,
+        borderRadius: '12px',
+        padding: processing ? '28px' : '36px 28px',
+        textAlign: 'center',
+        cursor: processing ? 'default' : 'pointer',
+        background: dragOver ? 'var(--accent-soft)' : 'var(--surface-alt)',
+        transition: 'all 0.25s ease',
+        position: 'relative',
+        overflow: 'hidden',
+      }}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept="image/jpeg,image/png,application/pdf"
+        onChange={handleChange}
+        style={{ display: 'none' }}
+      />
+      {processing ? (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+          <Icons.Loader />
+          <span style={{ color: 'var(--text-secondary)', fontSize: '14px', fontWeight: 500 }}>
+            Processing receipts with OCR…
+          </span>
+        </div>
+      ) : (
+        <div>
+          <div style={{
+            width: '48px', height: '48px', borderRadius: '50%',
+            background: 'var(--accent-soft)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', margin: '0 auto 14px', color: 'var(--accent)',
+          }}>
+            <Icons.Upload />
+          </div>
+          <p style={{ fontSize: '15px', fontWeight: 500, marginBottom: '4px' }}>
+            Drop receipts here or <span style={{ color: 'var(--accent)', textDecoration: 'underline' }}>browse files</span>
+          </p>
+          <p style={{ fontSize: '13px', color: 'var(--text-tertiary)' }}>
+            JPEG, PNG, or PDF — multiple files supported
+          </p>
+          {fileCount > 0 && (
+            <p style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: '8px' }}>
+              {fileCount} receipt{fileCount > 1 ? 's' : ''} loaded
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ───── Processing Queue ───── */
+function ProcessingQueue({ queue }) {
+  if (!queue.length) return null;
+  return (
+    <div className="slide-up" style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)', padding: '14px 16px',
+    }}>
+      <p style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: '10px' }}>
+        OCR Queue
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {queue.map((item) => (
+          <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px' }}>
+            {item.status === 'processing' ? (
+              <span style={{ color: 'var(--accent)' }}><Icons.Loader /></span>
+            ) : item.status === 'done' ? (
+              <span style={{ color: 'var(--success)' }}><Icons.Check /></span>
+            ) : (
+              <span style={{ color: 'var(--text-tertiary)', opacity: 0.4 }}>○</span>
+            )}
+            <span style={{ color: item.status === 'done' ? 'var(--text-tertiary)' : 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {item.name}
+            </span>
+            {item.status === 'done' && item.amount && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: 'var(--success)' }}>
+                {formatCurrency(item.amount)}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ───── Editable Cell ───── */
+function EditableCell({ value, onChange, type = 'text', placeholder = '', align = 'left', mono = false }) {
+  const [editing, setEditing] = useState(false);
+  const [localVal, setLocalVal] = useState(value);
+  const inputRef = useRef(null);
+
+  useEffect(() => { setLocalVal(value); }, [value]);
+  useEffect(() => { if (editing && inputRef.current) { inputRef.current.focus(); inputRef.current.select(); } }, [editing]);
+
+  const commit = () => {
+    setEditing(false);
+    if (localVal !== value) onChange(localVal);
+  };
+
+  const displayValue = type === 'accounting' && value ? formatCurrency(value) : value;
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        value={localVal}
+        onChange={(e) => setLocalVal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setLocalVal(value); setEditing(false); } }}
+        placeholder={placeholder}
+        style={{
+          width: '100%', padding: '4px 6px', fontSize: '13px',
+          fontFamily: mono ? 'var(--mono)' : 'var(--sans)',
+          border: '1.5px solid var(--accent)', borderRadius: '4px',
+          outline: 'none', textAlign: align, background: '#fff',
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      onClick={() => setEditing(true)}
+      style={{
+        padding: '4px 6px', cursor: 'text', minHeight: '28px',
+        fontSize: '13px', textAlign: align, borderRadius: '4px',
+        fontFamily: mono ? 'var(--mono)' : 'var(--sans)',
+        color: displayValue ? 'var(--text-primary)' : 'var(--text-tertiary)',
+        transition: 'background 0.15s',
+      }}
+      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(198,122,46,0.06)'}
+      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+    >
+      {displayValue || placeholder}
+    </div>
+  );
+}
+
+/* ───── Data Table ───── */
+function DataTable({ rows, onUpdateRow, onDeleteRow }) {
+  const total = useMemo(() => rows.reduce((s, r) => s + parseCurrency(r.amount), 0), [rows]);
+
+  if (rows.length === 0) {
+    return (
+      <div style={{
+        textAlign: 'center', padding: '48px 20px',
+        color: 'var(--text-tertiary)', fontSize: '14px',
+      }}>
+        <div style={{ marginBottom: '8px', opacity: 0.4 }}><Icons.Receipt /></div>
+        <p>Upload receipts to get started</p>
+        <p style={{ fontSize: '12px', marginTop: '4px' }}>OCR will extract amounts and dates automatically</p>
+      </div>
+    );
+  }
+
+  const columns = [
+    { key: 'vendor', label: 'Vendor / Supplier', flex: 1.5, placeholder: 'Enter vendor name…' },
+    { key: 'amount', label: 'Amount', flex: 0.8, type: 'accounting', placeholder: '0.00', align: 'right', mono: true },
+    { key: 'date', label: 'Date', flex: 0.8, placeholder: 'MM/DD/YYYY' },
+    { key: 'project', label: 'Project', flex: 1, placeholder: 'Project name…' },
+    { key: 'reason', label: 'Reason', flex: 1.2, placeholder: 'Purpose of expense…' },
+    { key: 'costCode', label: 'Cost Code', flex: 0.7, placeholder: 'Code…', mono: true },
+  ];
+
+  const headerStyle = {
+    fontSize: '11px', fontWeight: 600, textTransform: 'uppercase',
+    letterSpacing: '0.07em', color: 'var(--text-tertiary)',
+    padding: '10px 8px', borderBottom: '2px solid var(--border)',
+  };
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '780px' }}>
+        <thead>
+          <tr>
+            <th style={{ ...headerStyle, width: '32px' }}>#</th>
+            {columns.map(c => (
+              <th key={c.key} style={{ ...headerStyle, textAlign: c.align || 'left' }}>{c.label}</th>
+            ))}
+            <th style={{ ...headerStyle, width: '36px' }}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => (
+            <tr key={row.id} className="slide-up" style={{ animationDelay: `${idx * 50}ms`, borderBottom: '1px solid var(--border)' }}>
+              <td style={{ padding: '6px 8px', fontSize: '12px', color: 'var(--text-tertiary)', fontFamily: 'var(--mono)', verticalAlign: 'middle' }}>
+                {idx + 1}
+              </td>
+              {columns.map(c => (
+                <td key={c.key} style={{ padding: '4px 2px', verticalAlign: 'middle' }}>
+                  <EditableCell
+                    value={row[c.key]}
+                    onChange={(val) => onUpdateRow(row.id, c.key, val)}
+                    type={c.type}
+                    placeholder={c.placeholder}
+                    align={c.align}
+                    mono={c.mono}
+                  />
+                </td>
+              ))}
+              <td style={{ padding: '4px', verticalAlign: 'middle' }}>
+                <button
+                  onClick={() => onDeleteRow(row.id)}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'var(--text-tertiary)', padding: '4px', borderRadius: '4px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'all 0.15s',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; e.currentTarget.style.background = 'rgba(192,57,43,0.08)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-tertiary)'; e.currentTarget.style.background = 'none'; }}
+                  title="Remove row"
+                >
+                  <Icons.Trash />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colSpan={2} style={{
+              padding: '12px 8px', fontSize: '13px', fontWeight: 700,
+              textAlign: 'right', borderTop: '2px solid var(--text-primary)',
+            }}>
+              TOTAL
+            </td>
+            <td style={{
+              padding: '12px 8px', fontFamily: 'var(--mono)', fontSize: '14px',
+              fontWeight: 700, textAlign: 'right', borderTop: '2px solid var(--text-primary)',
+              color: 'var(--accent)',
+            }}>
+              {formatCurrency(total)}
+            </td>
+            <td colSpan={4} style={{ borderTop: '2px solid var(--text-primary)' }}></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+/* ───── PDF Generator ───── */
+async function generatePDF(title, rows, receiptImages, header = {}) {
+  const { companyName = '', employeeName = '', department = '', reportDate = '' } = header;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF('p', 'mm', 'letter');
+  const pageW = 215.9;
+  const pageH = 279.4;
+  const margin = 18;
+  const contentW = pageW - 2 * margin;
+  let y = margin;
+
+  // --- Helpers ---
+  const addFooter = (pageNum) => {
+    doc.setFontSize(8);
+    doc.setTextColor(160, 155, 145);
+    doc.text(`Page ${pageNum}`, pageW / 2, pageH - 10, { align: 'center' });
+    doc.text(new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }), pageW - margin, pageH - 10, { align: 'right' });
+  };
+
+  // --- Page 1: Report ---
+  // Header bar
+  doc.setFillColor(26, 23, 20);
+  doc.rect(0, 0, pageW, 36, 'F');
+  // Company name
+  if (companyName) {
+    doc.setFontSize(11);
+    doc.setTextColor(200, 195, 185);
+    doc.setFont('helvetica', 'normal');
+    doc.text(companyName, margin, 13);
+  }
+  // Report title
+  doc.setFontSize(16);
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.text(title, margin, companyName ? 26 : 22);
+
+  // Subtitle line with employee/department/date
+  y = 46;
+  doc.setFontSize(9);
+  doc.setTextColor(120, 115, 105);
+  doc.setFont('helvetica', 'normal');
+  const subtitleParts = [];
+  if (employeeName) subtitleParts.push(employeeName);
+  if (department) subtitleParts.push(department);
+  if (reportDate) subtitleParts.push(reportDate);
+  subtitleParts.push(`${rows.length} receipt${rows.length !== 1 ? 's' : ''}`);
+  doc.text(subtitleParts.join('  •  '), margin, y);
+  y += 10;
+
+  // Table
+  const cols = [
+    { key: 'vendor', label: 'Vendor', w: 38 },
+    { key: 'amount', label: 'Amount', w: 22, align: 'right' },
+    { key: 'date', label: 'Date', w: 22 },
+    { key: 'project', label: 'Project', w: 30 },
+    { key: 'reason', label: 'Reason', w: 42 },
+    { key: 'costCode', label: 'Cost Code', w: 20 },
+  ];
+  const totalW = cols.reduce((s, c) => s + c.w, 0);
+  const scale = contentW / totalW;
+  cols.forEach(c => c.w *= scale);
+
+  // Table header
+  doc.setFillColor(245, 243, 239);
+  doc.rect(margin, y, contentW, 8, 'F');
+  doc.setFontSize(7.5);
+  doc.setTextColor(106, 97, 88);
+  doc.setFont('helvetica', 'bold');
+  let x = margin;
+  cols.forEach(c => {
+    doc.text(c.label.toUpperCase(), c.align === 'right' ? x + c.w - 2 : x + 2, y + 5.5, { align: c.align === 'right' ? 'right' : 'left' });
+    x += c.w;
+  });
+  y += 8;
+
+  // Table rows
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  rows.forEach((row, i) => {
+    if (y > pageH - 40) {
+      addFooter(doc.getNumberOfPages());
+      doc.addPage();
+      y = margin;
+    }
+    if (i % 2 === 0) {
+      doc.setFillColor(250, 249, 247);
+      doc.rect(margin, y, contentW, 7, 'F');
+    }
+    doc.setTextColor(40, 37, 32);
+    x = margin;
+    cols.forEach(c => {
+      let val = row[c.key] || '';
+      if (c.key === 'amount' && val) val = formatCurrency(val);
+      // Truncate long text
+      const maxChars = Math.floor(c.w / 1.8);
+      if (val.length > maxChars) val = val.substring(0, maxChars - 1) + '…';
+      doc.text(val, c.align === 'right' ? x + c.w - 2 : x + 2, y + 5, { align: c.align === 'right' ? 'right' : 'left' });
+      x += c.w;
+    });
+    y += 7;
+  });
+
+  // Total row
+  y += 2;
+  doc.setDrawColor(26, 23, 20);
+  doc.setLineWidth(0.5);
+  doc.line(margin, y, margin + contentW, y);
+  y += 6;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(26, 23, 20);
+  const total = rows.reduce((s, r) => s + parseCurrency(r.amount), 0);
+  doc.text('GRAND TOTAL', margin + 2, y);
+  doc.setTextColor(198, 122, 46);
+  const amountX = margin + cols[0].w + cols[1].w - 2;
+  doc.text(formatCurrency(total), amountX, y, { align: 'right' });
+
+  addFooter(1);
+
+  // --- Receipt Pages ---
+  for (let i = 0; i < receiptImages.length; i++) {
+    const img = receiptImages[i];
+    if (!img.dataUrl) continue;
+
+    doc.addPage();
+    const pageNum = doc.getNumberOfPages();
+    y = margin;
+
+    // Label
+    doc.setFillColor(245, 243, 239);
+    doc.rect(margin, y, contentW, 8, 'F');
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(106, 97, 88);
+    doc.text(`RECEIPT ${i + 1} of ${receiptImages.length}  —  ${img.name}`, margin + 3, y + 5.5);
+    y += 12;
+
+    try {
+      const imgProps = doc.getImageProperties(img.dataUrl);
+      let imgW = contentW;
+      let imgH = (imgProps.height / imgProps.width) * imgW;
+      const maxH = pageH - y - 20;
+      if (imgH > maxH) {
+        imgH = maxH;
+        imgW = (imgProps.width / imgProps.height) * imgH;
+      }
+      const imgX = margin + (contentW - imgW) / 2;
+      doc.addImage(img.dataUrl, 'JPEG', imgX, y, imgW, imgH);
+    } catch (e) {
+      doc.setFontSize(10);
+      doc.setTextColor(160, 57, 43);
+      doc.text('Could not embed this receipt image.', margin + 3, y + 10);
+    }
+
+    addFooter(pageNum);
+  }
+
+  doc.save(`${title.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_')}.pdf`);
+}
+
+/* ───── Main App ───── */
+function App() {
+  const [title, setTitle] = useState('Expense Reimbursement Report');
+  const [companyName, setCompanyName] = useState('Company Name');
+  const [employeeName, setEmployeeName] = useState('');
+  const [department, setDepartment] = useState('');
+  const [reportDate, setReportDate] = useState(new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }));
+  const [rows, setRows] = useState([]);
+  const [receiptFiles, setReceiptFiles] = useState([]);
+  const [processing, setProcessing] = useState(false);
+  const [queue, setQueue] = useState([]);
+  const [generating, setGenerating] = useState(false);
+
+  const updateRow = useCallback((id, key, val) => {
+    setRows(prev => prev.map(r => r.id === id ? { ...r, [key]: val } : r));
+  }, []);
+
+  const deleteRow = useCallback((id) => {
+    setRows(prev => prev.filter(r => r.id !== id));
+    setReceiptFiles(prev => prev.filter(r => r.id !== id));
+  }, []);
+
+  const addEmptyRow = useCallback(() => {
+    const id = genId();
+    setRows(prev => [...prev, { id, vendor: '', amount: '', date: '', project: '', reason: '', costCode: '' }]);
+  }, []);
+
+  const handleFiles = useCallback(async (files) => {
+    setProcessing(true);
+
+    const queueItems = files.map(f => ({ id: genId(), name: f.name, status: 'pending', amount: null }));
+    setQueue(queueItems);
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const qItem = queueItems[i];
+
+      setQueue(prev => prev.map(q => q.id === qItem.id ? { ...q, status: 'processing' } : q));
+
+      let amount = '';
+      let date = '';
+
+      try {
+        // Only OCR image files
+        if (file.type.startsWith('image/')) {
+          const result = await Tesseract.recognize(file, 'eng', {
+            logger: () => {},
+          });
+          const text = result.data.text;
+          amount = extractAmountFromText(text);
+          date = extractDateFromText(text);
+        }
+      } catch (e) {
+        console.warn('OCR failed for', file.name, e);
+      }
+
+      const imageData = await fileToImageData(file);
+      const id = qItem.id;
+
+      setReceiptFiles(prev => [...prev, { id, file, dataUrl: imageData, name: file.name }]);
+      setRows(prev => [...prev, { id, vendor: '', amount, date, project: '', reason: '', costCode: '' }]);
+      setQueue(prev => prev.map(q => q.id === qItem.id ? { ...q, status: 'done', amount } : q));
+    }
+
+    setProcessing(false);
+    // Clear queue after a brief moment
+    setTimeout(() => setQueue([]), 2000);
+  }, []);
+
+  const handleDownload = useCallback(async () => {
+    if (rows.length === 0) return;
+    setGenerating(true);
+    try {
+      await generatePDF(title, rows, receiptFiles, { companyName, employeeName, department, reportDate });
+    } catch (e) {
+      console.error('PDF generation failed:', e);
+      alert('PDF generation encountered an error. Please try again.');
+    }
+    setGenerating(false);
+  }, [title, rows, receiptFiles, companyName, employeeName, department, reportDate]);
+
+  const total = useMemo(() => rows.reduce((s, r) => s + parseCurrency(r.amount), 0), [rows]);
+
+  return (
+    <div style={{ maxWidth: '960px', margin: '0 auto', padding: '24px 16px 60px' }}>
+      {/* Report Header */}
+      <div className="fade-in" style={{
+        background: 'var(--surface)', borderRadius: '12px',
+        border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
+        overflow: 'hidden', marginBottom: '20px',
+        borderLeft: '4px solid var(--accent)',
+      }}>
+        <div style={{ padding: '18px 20px' }}>
+          <EditableField label="" value={companyName} onChange={setCompanyName} fontSize="20px" fontWeight={700} placeholder="Company Name" />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '12px' }}>
+            <EditableField label="Employee" value={employeeName} onChange={setEmployeeName} placeholder="Employee Name" />
+            <EditableField label="Department" value={department} onChange={setDepartment} placeholder="Department" />
+            <EditableField label="Date" value={reportDate} onChange={setReportDate} placeholder="MM/DD/YYYY" />
+          </div>
+        </div>
+      </div>
+
+      {/* Top Bar */}
+      <div className="fade-in" style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        marginBottom: '24px', flexWrap: 'wrap', gap: '12px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{
+            width: '36px', height: '36px', borderRadius: '10px',
+            background: 'linear-gradient(135deg, #c67a2e, #e6a356)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#fff', boxShadow: '0 2px 8px rgba(198,122,46,0.3)',
+          }}>
+            <Icons.Receipt />
+          </div>
+          <EditableTitle value={title} onChange={setTitle} />
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {rows.length > 0 && (
+            <div className="fade-in" style={{
+              fontSize: '13px', color: 'var(--text-secondary)',
+              padding: '6px 12px', background: 'var(--surface)',
+              borderRadius: 'var(--radius)', border: '1px solid var(--border)',
+              fontFamily: 'var(--mono)',
+            }}>
+              {rows.length} item{rows.length !== 1 ? 's' : ''} · <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{formatCurrency(total)}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Upload */}
+      <div style={{ marginBottom: '20px' }}>
+        <UploadZone onFiles={handleFiles} processing={processing} fileCount={receiptFiles.length} />
+      </div>
+
+      {/* Processing Queue */}
+      {queue.length > 0 && (
+        <div style={{ marginBottom: '20px' }}>
+          <ProcessingQueue queue={queue} />
+        </div>
+      )}
+
+      {/* Table Card */}
+      <div className="fade-in" style={{
+        background: 'var(--surface)', borderRadius: '12px',
+        border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
+        overflow: 'hidden', marginBottom: '20px',
+      }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '14px 18px', borderBottom: '1px solid var(--border)',
+          background: 'var(--surface-alt)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Icons.FileText />
+            <span style={{ fontSize: '14px', fontWeight: 600 }}>Expense Details</span>
+          </div>
+          <button
+            onClick={addEmptyRow}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '4px',
+              background: 'none', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius)', padding: '5px 10px',
+              fontSize: '12px', fontWeight: 500, cursor: 'pointer',
+              color: 'var(--text-secondary)', transition: 'all 0.15s',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+          >
+            <Icons.Plus /> Add Row
+          </button>
+        </div>
+        <div style={{ padding: '0 18px 14px' }}>
+          <DataTable rows={rows} onUpdateRow={updateRow} onDeleteRow={deleteRow} />
+        </div>
+      </div>
+
+      {/* Receipt Thumbnails */}
+      {receiptFiles.length > 0 && (
+        <div className="fade-in" style={{
+          background: 'var(--surface)', borderRadius: '12px',
+          border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
+          overflow: 'hidden', marginBottom: '20px',
+        }}>
+          <div style={{
+            padding: '14px 18px', borderBottom: '1px solid var(--border)',
+            background: 'var(--surface-alt)', display: 'flex', alignItems: 'center', gap: '8px',
+          }}>
+            <Icons.Image />
+            <span style={{ fontSize: '14px', fontWeight: 600 }}>Uploaded Receipts</span>
+            <span style={{
+              fontSize: '11px', fontWeight: 600, background: 'var(--accent-soft)',
+              color: 'var(--accent)', padding: '2px 8px', borderRadius: '99px',
+            }}>{receiptFiles.length}</span>
+          </div>
+          <div style={{ padding: '16px 18px', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+            {receiptFiles.map((rf, i) => (
+              <div key={rf.id} className="slide-up" style={{
+                animationDelay: `${i * 60}ms`,
+                width: '100px', borderRadius: '8px', overflow: 'hidden',
+                border: '1px solid var(--border)', background: 'var(--surface-alt)',
+              }}>
+                {rf.dataUrl ? (
+                  <img src={rf.dataUrl} alt={rf.name} style={{ width: '100%', height: '80px', objectFit: 'cover' }} />
+                ) : (
+                  <div style={{ width: '100%', height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)' }}>
+                    <Icons.FileText />
+                  </div>
+                )}
+                <div style={{
+                  padding: '4px 6px', fontSize: '10px', color: 'var(--text-tertiary)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center',
+                }}>
+                  {rf.name}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Download */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          onClick={handleDownload}
+          disabled={rows.length === 0 || generating}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '8px',
+            padding: '12px 28px', borderRadius: '10px',
+            background: rows.length === 0 ? 'var(--border)' : generating ? 'var(--border-strong)' : 'linear-gradient(135deg, #c67a2e, #d4893e)',
+            color: rows.length === 0 ? 'var(--text-tertiary)' : '#fff',
+            border: 'none', fontSize: '14px', fontWeight: 600,
+            cursor: rows.length === 0 || generating ? 'not-allowed' : 'pointer',
+            boxShadow: rows.length > 0 && !generating ? '0 4px 16px rgba(198,122,46,0.35)' : 'none',
+            transition: 'all 0.2s',
+            fontFamily: 'var(--sans)',
+          }}
+        >
+          {generating ? <Icons.Loader /> : <Icons.Download />}
+          {generating ? 'Generating Report…' : 'Download Report'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
