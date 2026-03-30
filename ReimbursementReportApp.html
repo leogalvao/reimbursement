@@ -9,6 +9,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -199,12 +200,10 @@ async function fileToImageUrl(file) {
 }
 
 async function fileToImageData(file) {
+  if (file.type === 'application/pdf') {
+    return null;
+  }
   return new Promise((resolve) => {
-    if (file.type === 'application/pdf') {
-      // For PDF files, create a readable placeholder
-      resolve(null);
-      return;
-    }
     const reader = new FileReader();
     reader.onload = (e) => resolve(e.target.result);
     reader.readAsDataURL(file);
@@ -709,45 +708,41 @@ async function generatePDF(title, rows, receiptImages, header = {}) {
 
   addFooter(1);
 
-  // --- Receipt Pages ---
-  for (let i = 0; i < receiptImages.length; i++) {
-    const img = receiptImages[i];
-    if (!img.dataUrl) continue;
+  // --- Merge attachments using pdf-lib ---
+  const { PDFDocument } = PDFLib;
+  const reportBytes = doc.output('arraybuffer');
+  const merged = await PDFDocument.load(reportBytes);
 
-    doc.addPage();
-    const pageNum = doc.getNumberOfPages();
-    y = margin;
-
-    // Label
-    doc.setFillColor(245, 243, 239);
-    doc.rect(margin, y, contentW, 8, 'F');
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(106, 97, 88);
-    doc.text(`RECEIPT ${i + 1} of ${receiptImages.length}  —  ${img.name}`, margin + 3, y + 5.5);
-    y += 12;
-
+  for (const img of receiptImages) {
     try {
-      const imgProps = doc.getImageProperties(img.dataUrl);
-      let imgW = contentW;
-      let imgH = (imgProps.height / imgProps.width) * imgW;
-      const maxH = pageH - y - 20;
-      if (imgH > maxH) {
-        imgH = maxH;
-        imgW = (imgProps.width / imgProps.height) * imgH;
+      if (img.file && img.file.type === 'application/pdf') {
+        const pdfBytes = await img.file.arrayBuffer();
+        const srcDoc = await PDFDocument.load(pdfBytes);
+        const copiedPages = await merged.copyPages(srcDoc, srcDoc.getPageIndices());
+        copiedPages.forEach(page => merged.addPage(page));
+      } else if (img.dataUrl) {
+        const isJpeg = img.dataUrl.startsWith('data:image/jpeg');
+        const base64 = img.dataUrl.split(',')[1];
+        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+        const embedFn = isJpeg ? merged.embedJpg.bind(merged) : merged.embedPng.bind(merged);
+        const image = await embedFn(bytes);
+        const dims = image.scale(1);
+        const page = merged.addPage([dims.width, dims.height]);
+        page.drawImage(image, { x: 0, y: 0, width: dims.width, height: dims.height });
       }
-      const imgX = margin + (contentW - imgW) / 2;
-      doc.addImage(img.dataUrl, 'JPEG', imgX, y, imgW, imgH);
     } catch (e) {
-      doc.setFontSize(10);
-      doc.setTextColor(160, 57, 43);
-      doc.text('Could not embed this receipt image.', margin + 3, y + 10);
+      console.warn('Failed to attach receipt:', img.name, e);
     }
-
-    addFooter(pageNum);
   }
 
-  doc.save(`${title.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_')}.pdf`);
+  const finalBytes = await merged.save();
+  const blob = new Blob([finalBytes], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${title.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_')}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /* ───── Main App ───── */
@@ -839,47 +834,45 @@ function App() {
       <div className="fade-in" style={{
         background: 'var(--surface)', borderRadius: '12px',
         border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
-        overflow: 'hidden', marginBottom: '20px',
+        overflow: 'hidden', marginBottom: '24px',
         borderLeft: '4px solid var(--accent)',
       }}>
         <div style={{ padding: '18px 20px' }}>
-          <EditableField label="" value={companyName} onChange={setCompanyName} fontSize="20px" fontWeight={700} placeholder="Company Name" />
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '12px' }}>
+          {/* Top row: icon + title + summary badge */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{
+                width: '36px', height: '36px', borderRadius: '10px',
+                background: 'linear-gradient(135deg, #c67a2e, #e6a356)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#fff', boxShadow: '0 2px 8px rgba(198,122,46,0.3)',
+              }}>
+                <Icons.Receipt />
+              </div>
+              <EditableTitle value={title} onChange={setTitle} />
+            </div>
+            {rows.length > 0 && (
+              <div className="fade-in" style={{
+                fontSize: '13px', color: 'var(--text-secondary)',
+                padding: '6px 12px', background: 'var(--surface-alt)',
+                borderRadius: 'var(--radius)', border: '1px solid var(--border)',
+                fontFamily: 'var(--mono)',
+              }}>
+                {rows.length} item{rows.length !== 1 ? 's' : ''} · <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{formatCurrency(total)}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Divider */}
+          <div style={{ borderTop: '1px solid var(--border)', margin: '14px 0' }} />
+
+          {/* Company info fields */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+            <EditableField label="Company" value={companyName} onChange={setCompanyName} fontSize="14px" fontWeight={600} placeholder="Company Name" />
             <EditableField label="Employee" value={employeeName} onChange={setEmployeeName} placeholder="Employee Name" />
             <EditableField label="Department" value={department} onChange={setDepartment} placeholder="Department" />
             <EditableField label="Date" value={reportDate} onChange={setReportDate} placeholder="MM/DD/YYYY" />
           </div>
-        </div>
-      </div>
-
-      {/* Top Bar */}
-      <div className="fade-in" style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        marginBottom: '24px', flexWrap: 'wrap', gap: '12px',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{
-            width: '36px', height: '36px', borderRadius: '10px',
-            background: 'linear-gradient(135deg, #c67a2e, #e6a356)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#fff', boxShadow: '0 2px 8px rgba(198,122,46,0.3)',
-          }}>
-            <Icons.Receipt />
-          </div>
-          <EditableTitle value={title} onChange={setTitle} />
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {rows.length > 0 && (
-            <div className="fade-in" style={{
-              fontSize: '13px', color: 'var(--text-secondary)',
-              padding: '6px 12px', background: 'var(--surface)',
-              borderRadius: 'var(--radius)', border: '1px solid var(--border)',
-              fontFamily: 'var(--mono)',
-            }}>
-              {rows.length} item{rows.length !== 1 ? 's' : ''} · <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{formatCurrency(total)}</span>
-            </div>
-          )}
         </div>
       </div>
 
