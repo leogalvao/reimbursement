@@ -7,9 +7,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -199,15 +200,108 @@ async function fileToImageUrl(file) {
   return URL.createObjectURL(file);
 }
 
+async function pdfPageToImageData(file) {
+  try {
+    if (!window.pdfjsLib) return null;
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: 2.0 });
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    return canvas.toDataURL('image/png');
+  } catch (e) {
+    console.warn('PDF rendering failed:', e);
+    return null;
+  }
+}
+
 async function fileToImageData(file) {
   if (file.type === 'application/pdf') {
-    return null;
+    return await pdfPageToImageData(file);
   }
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (e) => resolve(e.target.result);
     reader.readAsDataURL(file);
   });
+}
+
+/* ───── LocalStorage Persistence ───── */
+const STORAGE_KEY = 'reimbursement_report_v1';
+
+function saveToStorage(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+  catch (e) { console.warn('Failed to save to localStorage:', e); }
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { console.warn('Failed to load from localStorage:', e); return null; }
+}
+
+function clearStorage() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+}
+
+function compressThumbnail(dataUrl, maxWidth = 1200, quality = 0.7) {
+  return new Promise((resolve) => {
+    if (!dataUrl || !dataUrl.startsWith('data:image')) { resolve(dataUrl); return; }
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxWidth / img.width);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+/* ───── Constants ───── */
+const EXPENSE_CATEGORIES = ['Travel', 'Meals', 'Supplies', 'Software', 'Professional Services', 'Equipment', 'Other'];
+
+/* ───── Validators ───── */
+function validateAmount(val) {
+  if (!val || val.trim() === '') return { valid: true, cleaned: '' };
+  const cleaned = val.replace(/[^0-9.\-]/g, '');
+  const num = parseFloat(cleaned);
+  if (isNaN(num)) return { valid: false };
+  return { valid: true, cleaned: num.toFixed(2) };
+}
+
+function validateDate(val) {
+  if (!val || val.trim() === '') return { valid: true, cleaned: '' };
+  const match = val.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return { valid: false };
+  const [, m, d, y] = match;
+  const month = parseInt(m, 10), day = parseInt(d, 10), year = parseInt(y, 10);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || year < 1900 || year > 2100) return { valid: false };
+  return { valid: true, cleaned: `${m.padStart(2, '0')}/${d.padStart(2, '0')}/${y}` };
+}
+
+/* ───── Lazy Tesseract Loader ───── */
+let tesseractLoadPromise = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve();
+  if (tesseractLoadPromise) return tesseractLoadPromise;
+  tesseractLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js';
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return tesseractLoadPromise;
 }
 
 /* ───── Editable Title ───── */
@@ -432,17 +526,31 @@ function ProcessingQueue({ queue }) {
 }
 
 /* ───── Editable Cell ───── */
-function EditableCell({ value, onChange, type = 'text', placeholder = '', align = 'left', mono = false }) {
+function EditableCell({ value, onChange, type = 'text', placeholder = '', align = 'left', mono = false, validate }) {
   const [editing, setEditing] = useState(false);
   const [localVal, setLocalVal] = useState(value);
+  const [validationError, setValidationError] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => { setLocalVal(value); }, [value]);
+  useEffect(() => {
+    if (validate && value) { setValidationError(!validate(value).valid); }
+    else { setValidationError(false); }
+  }, [value]);
   useEffect(() => { if (editing && inputRef.current) { inputRef.current.focus(); inputRef.current.select(); } }, [editing]);
 
   const commit = () => {
     setEditing(false);
-    if (localVal !== value) onChange(localVal);
+    if (localVal !== value) {
+      if (validate) {
+        const result = validate(localVal);
+        setValidationError(!result.valid);
+        onChange(result.valid && result.cleaned !== undefined ? result.cleaned : localVal);
+      } else {
+        setValidationError(false);
+        onChange(localVal);
+      }
+    }
   };
 
   const displayValue = type === 'accounting' && value ? formatCurrency(value) : value;
@@ -475,7 +583,8 @@ function EditableCell({ value, onChange, type = 'text', placeholder = '', align 
         fontSize: '13px', textAlign: align, borderRadius: '4px',
         fontFamily: mono ? 'var(--mono)' : 'var(--sans)',
         color: displayValue ? 'var(--text-primary)' : 'var(--text-tertiary)',
-        transition: 'background 0.15s',
+        transition: 'all 0.15s',
+        border: validationError ? '1.5px solid var(--danger)' : '1.5px solid transparent',
       }}
       onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(198,122,46,0.06)'}
       onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
@@ -485,8 +594,30 @@ function EditableCell({ value, onChange, type = 'text', placeholder = '', align 
   );
 }
 
+/* ───── Select Cell (for dropdowns) ───── */
+function SelectCell({ value, onChange, options, placeholder = 'Select…' }) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      style={{
+        width: '100%', padding: '4px 6px', fontSize: '13px',
+        fontFamily: 'var(--sans)', border: '1.5px solid transparent',
+        background: 'transparent', color: value ? 'var(--text-primary)' : 'var(--text-tertiary)',
+        cursor: 'pointer', outline: 'none', borderRadius: '4px',
+        transition: 'all 0.15s', minHeight: '28px',
+      }}
+      onFocus={(e) => e.currentTarget.style.borderColor = 'var(--accent)'}
+      onBlur={(e) => e.currentTarget.style.borderColor = 'transparent'}
+    >
+      <option value="">{placeholder}</option>
+      {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+    </select>
+  );
+}
+
 /* ───── Data Table ───── */
-function DataTable({ rows, onUpdateRow, onDeleteRow }) {
+function DataTable({ rows, onUpdateRow, onDeleteRow, highlightedId, onHighlightRow }) {
   const total = useMemo(() => rows.reduce((s, r) => s + parseCurrency(r.amount), 0), [rows]);
 
   if (rows.length === 0) {
@@ -504,11 +635,12 @@ function DataTable({ rows, onUpdateRow, onDeleteRow }) {
 
   const columns = [
     { key: 'vendor', label: 'Vendor / Supplier', flex: 1.5, placeholder: 'Enter vendor name…' },
-    { key: 'amount', label: 'Amount', flex: 0.8, type: 'accounting', placeholder: '0.00', align: 'right', mono: true },
-    { key: 'date', label: 'Date', flex: 0.8, placeholder: 'MM/DD/YYYY' },
+    { key: 'amount', label: 'Amount', flex: 0.8, type: 'accounting', placeholder: '0.00', align: 'right', mono: true, validate: validateAmount },
+    { key: 'date', label: 'Date', flex: 0.8, placeholder: 'MM/DD/YYYY', validate: validateDate },
     { key: 'project', label: 'Project', flex: 1, placeholder: 'Project name…' },
     { key: 'reason', label: 'Reason', flex: 1.2, placeholder: 'Purpose of expense…' },
     { key: 'costCode', label: 'Cost Code', flex: 0.7, placeholder: 'Code…', mono: true },
+    { key: 'category', label: 'Category', flex: 1, isSelect: true },
   ];
 
   const headerStyle = {
@@ -519,7 +651,7 @@ function DataTable({ rows, onUpdateRow, onDeleteRow }) {
 
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '780px' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '880px' }}>
         <thead>
           <tr>
             <th style={{ ...headerStyle, width: '32px' }}>#</th>
@@ -531,20 +663,37 @@ function DataTable({ rows, onUpdateRow, onDeleteRow }) {
         </thead>
         <tbody>
           {rows.map((row, idx) => (
-            <tr key={row.id} className="slide-up" style={{ animationDelay: `${idx * 50}ms`, borderBottom: '1px solid var(--border)' }}>
+            <tr key={row.id} data-row-id={row.id} className="slide-up"
+              onMouseEnter={() => onHighlightRow && onHighlightRow(row.id)}
+              onMouseLeave={() => onHighlightRow && onHighlightRow(null)}
+              style={{
+                animationDelay: `${idx * 50}ms`, borderBottom: '1px solid var(--border)',
+                background: highlightedId === row.id ? 'var(--accent-soft)' : 'transparent',
+                transition: 'background 0.2s',
+              }}>
               <td style={{ padding: '6px 8px', fontSize: '12px', color: 'var(--text-tertiary)', fontFamily: 'var(--mono)', verticalAlign: 'middle' }}>
                 {idx + 1}
               </td>
               {columns.map(c => (
                 <td key={c.key} style={{ padding: '4px 2px', verticalAlign: 'middle' }}>
-                  <EditableCell
-                    value={row[c.key]}
-                    onChange={(val) => onUpdateRow(row.id, c.key, val)}
-                    type={c.type}
-                    placeholder={c.placeholder}
-                    align={c.align}
-                    mono={c.mono}
-                  />
+                  {c.isSelect ? (
+                    <SelectCell
+                      value={row[c.key]}
+                      onChange={(val) => onUpdateRow(row.id, c.key, val)}
+                      options={EXPENSE_CATEGORIES}
+                      placeholder="Category…"
+                    />
+                  ) : (
+                    <EditableCell
+                      value={row[c.key]}
+                      onChange={(val) => onUpdateRow(row.id, c.key, val)}
+                      type={c.type}
+                      placeholder={c.placeholder}
+                      align={c.align}
+                      mono={c.mono}
+                      validate={c.validate}
+                    />
+                  )}
                 </td>
               ))}
               <td style={{ padding: '4px', verticalAlign: 'middle' }}>
@@ -581,7 +730,7 @@ function DataTable({ rows, onUpdateRow, onDeleteRow }) {
             }}>
               {formatCurrency(total)}
             </td>
-            <td colSpan={4} style={{ borderTop: '2px solid var(--text-primary)' }}></td>
+            <td colSpan={5} style={{ borderTop: '2px solid var(--text-primary)' }}></td>
           </tr>
         </tfoot>
       </table>
@@ -646,6 +795,7 @@ async function generatePDF(title, rows, receiptImages, header = {}) {
     { key: 'project', label: 'Project', w: 30 },
     { key: 'reason', label: 'Reason', w: 42 },
     { key: 'costCode', label: 'Cost Code', w: 20 },
+    { key: 'category', label: 'Category', w: 24 },
   ];
   const totalW = cols.reduce((s, c) => s + c.w, 0);
   const scale = contentW / totalW;
@@ -745,35 +895,202 @@ async function generatePDF(title, rows, receiptImages, header = {}) {
   URL.revokeObjectURL(url);
 }
 
+/* ───── Lightbox ───── */
+function Lightbox({ images, currentIndex, onClose, onNavigate }) {
+  const [zoom, setZoom] = useState(1);
+
+  useEffect(() => { setZoom(1); }, [currentIndex]);
+
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowLeft') onNavigate(-1);
+      if (e.key === 'ArrowRight') onNavigate(1);
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [onClose, onNavigate]);
+
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    setZoom(prev => Math.max(0.5, Math.min(5, prev + (e.deltaY > 0 ? -0.2 : 0.2))));
+  }, []);
+
+  const current = images[currentIndex];
+  if (!current) return null;
+
+  const navBtnStyle = {
+    position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+    background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff',
+    width: '40px', height: '40px', borderRadius: '50%',
+    fontSize: '20px', cursor: 'pointer', display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
+    transition: 'background 0.2s',
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, zIndex: 9999,
+      background: 'rgba(0,0,0,0.85)', display: 'flex',
+      alignItems: 'center', justifyContent: 'center',
+    }}>
+      <button onClick={onClose} style={{
+        position: 'absolute', top: '16px', right: '16px',
+        background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff',
+        width: '36px', height: '36px', borderRadius: '50%',
+        fontSize: '18px', cursor: 'pointer', zIndex: 1,
+      }}>&times;</button>
+
+      {currentIndex > 0 && (
+        <button onClick={(e) => { e.stopPropagation(); onNavigate(-1); }}
+          style={{ ...navBtnStyle, left: '16px' }}
+          onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.3)'}
+          onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.15)'}
+        >&#8592;</button>
+      )}
+
+      <div onClick={(e) => e.stopPropagation()} onWheel={handleWheel}
+        style={{ overflow: 'auto', maxWidth: '90vw', maxHeight: '90vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {current.dataUrl ? (
+          <img src={current.dataUrl} alt={current.name}
+            style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', transition: 'transform 0.1s', maxWidth: '90vw', maxHeight: '90vh' }} />
+        ) : (
+          <div style={{ color: '#fff', padding: '40px', fontFamily: 'var(--sans)' }}>No preview available</div>
+        )}
+      </div>
+
+      {currentIndex < images.length - 1 && (
+        <button onClick={(e) => { e.stopPropagation(); onNavigate(1); }}
+          style={{ ...navBtnStyle, right: '16px' }}
+          onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.3)'}
+          onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.15)'}
+        >&#8594;</button>
+      )}
+
+      <div style={{
+        position: 'absolute', bottom: '16px', left: '50%', transform: 'translateX(-50%)',
+        color: 'rgba(255,255,255,0.7)', fontSize: '13px', fontFamily: 'var(--sans)',
+      }}>{currentIndex + 1} / {images.length}</div>
+    </div>
+  );
+}
+
+/* ───── CSV Export ───── */
+function generateCSV(rows, header = {}) {
+  const escapeCSV = (val) => {
+    const str = String(val || '');
+    if (str.includes('"') || str.includes(',') || str.includes('\n')) return '"' + str.replace(/"/g, '""') + '"';
+    return str;
+  };
+  const columns = ['Vendor', 'Amount', 'Date', 'Category', 'Project', 'Reason', 'Cost Code'];
+  const keys = ['vendor', 'amount', 'date', 'category', 'project', 'reason', 'costCode'];
+  let csv = columns.map(escapeCSV).join(',') + '\n';
+  rows.forEach(row => { csv += keys.map(k => escapeCSV(row[k])).join(',') + '\n'; });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(header.title || 'expense_report').replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ───── Undo Toast ───── */
+function UndoToast({ message, onUndo, onDismiss }) {
+  useEffect(() => {
+    const timer = setTimeout(onDismiss, 6000);
+    return () => clearTimeout(timer);
+  }, [onDismiss]);
+
+  return (
+    <div className="slide-up" style={{
+      position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+      background: 'var(--text-primary)', color: '#fff', padding: '12px 20px',
+      borderRadius: 'var(--radius)', boxShadow: 'var(--shadow-lg)',
+      display: 'flex', alignItems: 'center', gap: '16px',
+      fontSize: '14px', zIndex: 10000, fontFamily: 'var(--sans)',
+    }}>
+      <span>{message}</span>
+      <button onClick={onUndo} style={{
+        background: 'var(--accent)', color: '#fff', border: 'none',
+        borderRadius: '4px', padding: '4px 12px', fontSize: '13px',
+        fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)',
+      }}>Undo</button>
+    </div>
+  );
+}
+
 /* ───── Main App ───── */
 function App() {
-  const [title, setTitle] = useState('Expense Reimbursement Report');
-  const [companyName, setCompanyName] = useState('Company Name');
-  const [employeeName, setEmployeeName] = useState('');
-  const [department, setDepartment] = useState('');
-  const [reportDate, setReportDate] = useState(new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }));
-  const [rows, setRows] = useState([]);
-  const [receiptFiles, setReceiptFiles] = useState([]);
+  const savedData = useMemo(() => loadFromStorage(), []);
+
+  const [title, setTitle] = useState(savedData?.title || 'Expense Reimbursement Report');
+  const [companyName, setCompanyName] = useState(savedData?.companyName || 'Company Name');
+  const [employeeName, setEmployeeName] = useState(savedData?.employeeName || '');
+  const [department, setDepartment] = useState(savedData?.department || '');
+  const [reportDate, setReportDate] = useState(savedData?.reportDate || new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }));
+  const [rows, setRows] = useState(savedData?.rows || []);
+  const [receiptFiles, setReceiptFiles] = useState(savedData?.receiptFiles || []);
   const [processing, setProcessing] = useState(false);
   const [queue, setQueue] = useState([]);
   const [generating, setGenerating] = useState(false);
+  const [deletedItem, setDeletedItem] = useState(null);
+  const [highlightedId, setHighlightedId] = useState(null);
+  const [lightboxIndex, setLightboxIndex] = useState(null);
 
   const updateRow = useCallback((id, key, val) => {
     setRows(prev => prev.map(r => r.id === id ? { ...r, [key]: val } : r));
   }, []);
 
   const deleteRow = useCallback((id) => {
-    setRows(prev => prev.filter(r => r.id !== id));
+    setRows(prev => {
+      const index = prev.findIndex(r => r.id === id);
+      if (index < 0) return prev;
+      const row = prev[index];
+      const receipt = receiptFiles.find(r => r.id === id) || null;
+      setDeletedItem({ row, receipt, index });
+      return prev.filter(r => r.id !== id);
+    });
     setReceiptFiles(prev => prev.filter(r => r.id !== id));
-  }, []);
+  }, [receiptFiles]);
+
+  const undoDelete = useCallback(() => {
+    if (!deletedItem) return;
+    const { row, receipt, index } = deletedItem;
+    setRows(prev => { const next = [...prev]; next.splice(Math.min(index, next.length), 0, row); return next; });
+    if (receipt) {
+      setReceiptFiles(prev => { const next = [...prev]; next.splice(Math.min(index, next.length), 0, receipt); return next; });
+    }
+    setDeletedItem(null);
+  }, [deletedItem]);
 
   const addEmptyRow = useCallback(() => {
     const id = genId();
-    setRows(prev => [...prev, { id, vendor: '', amount: '', date: '', project: '', reason: '', costCode: '' }]);
+    setRows(prev => [...prev, { id, vendor: '', amount: '', date: '', project: '', reason: '', costCode: '', category: '' }]);
   }, []);
+
+  // Debounced localStorage save
+  const saveTimerRef = useRef(null);
+  useEffect(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      const compressedReceipts = await Promise.all(
+        receiptFiles.map(async (rf) => ({
+          id: rf.id, name: rf.name,
+          dataUrl: await compressThumbnail(rf.dataUrl),
+        }))
+      );
+      saveToStorage({ title, companyName, employeeName, department, reportDate, rows, receiptFiles: compressedReceipts });
+    }, 800);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [title, companyName, employeeName, department, reportDate, rows, receiptFiles]);
 
   const handleFiles = useCallback(async (files) => {
     setProcessing(true);
+
+    // Lazy-load Tesseract on first upload
+    setQueue([{ id: 'loading-ocr', name: 'Loading OCR engine…', status: 'processing', amount: null }]);
+    try { await loadTesseract(); } catch (e) { console.warn('Failed to load Tesseract:', e); }
 
     const queueItems = files.map(f => ({ id: genId(), name: f.name, status: 'pending', amount: null }));
     setQueue(queueItems);
@@ -788,14 +1105,21 @@ function App() {
       let date = '';
 
       try {
-        // Only OCR image files
-        if (file.type.startsWith('image/')) {
+        if (window.Tesseract && file.type.startsWith('image/')) {
           const result = await Tesseract.recognize(file, 'eng', {
             logger: () => {},
           });
           const text = result.data.text;
           amount = extractAmountFromText(text);
           date = extractDateFromText(text);
+        } else if (window.Tesseract && file.type === 'application/pdf') {
+          const pdfImage = await pdfPageToImageData(file);
+          if (pdfImage) {
+            const result = await Tesseract.recognize(pdfImage, 'eng', { logger: () => {} });
+            const text = result.data.text;
+            amount = extractAmountFromText(text);
+            date = extractDateFromText(text);
+          }
         }
       } catch (e) {
         console.warn('OCR failed for', file.name, e);
@@ -805,7 +1129,7 @@ function App() {
       const id = qItem.id;
 
       setReceiptFiles(prev => [...prev, { id, file, dataUrl: imageData, name: file.name }]);
-      setRows(prev => [...prev, { id, vendor: '', amount, date, project: '', reason: '', costCode: '' }]);
+      setRows(prev => [...prev, { id, vendor: '', amount, date, project: '', reason: '', costCode: '', category: '' }]);
       setQueue(prev => prev.map(q => q.id === qItem.id ? { ...q, status: 'done', amount } : q));
     }
 
@@ -903,23 +1227,47 @@ function App() {
             <Icons.FileText />
             <span style={{ fontSize: '14px', fontWeight: 600 }}>Expense Details</span>
           </div>
-          <button
-            onClick={addEmptyRow}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '4px',
-              background: 'none', border: '1px solid var(--border)',
-              borderRadius: 'var(--radius)', padding: '5px 10px',
-              fontSize: '12px', fontWeight: 500, cursor: 'pointer',
-              color: 'var(--text-secondary)', transition: 'all 0.15s',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
-          >
-            <Icons.Plus /> Add Row
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={addEmptyRow}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '4px',
+                background: 'none', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)', padding: '5px 10px',
+                fontSize: '12px', fontWeight: 500, cursor: 'pointer',
+                color: 'var(--text-secondary)', transition: 'all 0.15s',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            >
+              <Icons.Plus /> Add Row
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm('Clear all data? This cannot be undone.')) {
+                  setRows([]); setReceiptFiles([]);
+                  setTitle('Expense Reimbursement Report'); setCompanyName('Company Name');
+                  setEmployeeName(''); setDepartment('');
+                  setReportDate(new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }));
+                  clearStorage();
+                }
+              }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '4px',
+                background: 'none', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)', padding: '5px 10px',
+                fontSize: '12px', fontWeight: 500, cursor: 'pointer',
+                color: 'var(--text-secondary)', transition: 'all 0.15s',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--danger)'; e.currentTarget.style.color = 'var(--danger)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            >
+              <Icons.Trash /> Clear All
+            </button>
+          </div>
         </div>
         <div style={{ padding: '0 18px 14px' }}>
-          <DataTable rows={rows} onUpdateRow={updateRow} onDeleteRow={deleteRow} />
+          <DataTable rows={rows} onUpdateRow={updateRow} onDeleteRow={deleteRow} highlightedId={highlightedId} onHighlightRow={setHighlightedId} />
         </div>
       </div>
 
@@ -942,33 +1290,76 @@ function App() {
             }}>{receiptFiles.length}</span>
           </div>
           <div style={{ padding: '16px 18px', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-            {receiptFiles.map((rf, i) => (
-              <div key={rf.id} className="slide-up" style={{
-                animationDelay: `${i * 60}ms`,
-                width: '100px', borderRadius: '8px', overflow: 'hidden',
-                border: '1px solid var(--border)', background: 'var(--surface-alt)',
-              }}>
-                {rf.dataUrl ? (
-                  <img src={rf.dataUrl} alt={rf.name} style={{ width: '100%', height: '80px', objectFit: 'cover' }} />
-                ) : (
-                  <div style={{ width: '100%', height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)' }}>
-                    <Icons.FileText />
+            {receiptFiles.map((rf, i) => {
+              const rowIndex = rows.findIndex(r => r.id === rf.id);
+              return (
+                <div key={rf.id} className="slide-up"
+                  onMouseEnter={() => setHighlightedId(rf.id)}
+                  onMouseLeave={() => setHighlightedId(null)}
+                  style={{
+                    animationDelay: `${i * 60}ms`,
+                    width: '100px', borderRadius: '8px', overflow: 'hidden', position: 'relative',
+                    border: highlightedId === rf.id ? '2px solid var(--accent)' : '1px solid var(--border)',
+                    background: 'var(--surface-alt)', cursor: 'pointer', transition: 'border 0.2s',
+                  }}
+                >
+                  {rowIndex >= 0 && (
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const el = document.querySelector(`[data-row-id="${rf.id}"]`);
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }}
+                      style={{
+                        position: 'absolute', top: '4px', left: '4px', zIndex: 1,
+                        width: '20px', height: '20px', borderRadius: '50%',
+                        background: 'var(--accent)', color: '#fff',
+                        fontSize: '11px', fontWeight: 700,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        boxShadow: 'var(--shadow-sm)', cursor: 'pointer',
+                      }}
+                      title={`Go to row ${rowIndex + 1}`}
+                    >{rowIndex + 1}</div>
+                  )}
+                  <div onClick={() => setLightboxIndex(i)}>
+                    {rf.dataUrl ? (
+                      <img src={rf.dataUrl} alt={rf.name} style={{ width: '100%', height: '80px', objectFit: 'cover' }} />
+                    ) : (
+                      <div style={{ width: '100%', height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)' }}>
+                        <Icons.FileText />
+                      </div>
+                    )}
                   </div>
-                )}
-                <div style={{
-                  padding: '4px 6px', fontSize: '10px', color: 'var(--text-tertiary)',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center',
-                }}>
-                  {rf.name}
+                  <div style={{
+                    padding: '4px 6px', fontSize: '10px', color: 'var(--text-tertiary)',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center',
+                  }}>
+                    {rf.name}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
       {/* Download */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+        <button
+          onClick={() => generateCSV(rows, { title })}
+          disabled={rows.length === 0}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '8px',
+            padding: '12px 20px', borderRadius: '10px',
+            background: 'var(--surface)', border: '1px solid var(--border)',
+            color: rows.length === 0 ? 'var(--text-tertiary)' : 'var(--text-secondary)',
+            fontSize: '14px', fontWeight: 600,
+            cursor: rows.length === 0 ? 'not-allowed' : 'pointer',
+            fontFamily: 'var(--sans)', transition: 'all 0.2s',
+          }}
+        >
+          <Icons.Download /> Export CSV
+        </button>
         <button
           onClick={handleDownload}
           disabled={rows.length === 0 || generating}
@@ -988,6 +1379,23 @@ function App() {
           {generating ? 'Generating Report…' : 'Download Report'}
         </button>
       </div>
+
+      {deletedItem && (
+        <UndoToast
+          message={`Row deleted${deletedItem.row.vendor ? ': ' + deletedItem.row.vendor : ''}`}
+          onUndo={undoDelete}
+          onDismiss={() => setDeletedItem(null)}
+        />
+      )}
+
+      {lightboxIndex !== null && (
+        <Lightbox
+          images={receiptFiles}
+          currentIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onNavigate={(dir) => setLightboxIndex(prev => Math.max(0, Math.min(receiptFiles.length - 1, prev + dir)))}
+        />
+      )}
     </div>
   );
 }
